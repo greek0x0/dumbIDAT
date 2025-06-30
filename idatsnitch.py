@@ -2,7 +2,6 @@ import hashlib, time, sys
 from hexdump import hexdump
 import lznt1
 
-
 TARGET = 0xC6A579EA
 
 def chunky():
@@ -141,12 +140,12 @@ def next_stage(payload_region, matched_dword, hash_multipler):
         #print(f'{ascii_string} : hash = 0x{hash_value:08X}')
 
         if hash_value == matched_dword:
-            print(f'matched DWORD: {ascii_string}')
+            #print(f'matched DWORD: {ascii_string}')
 
             payload_offset = int.from_bytes(entry[0x82:0x86], 'little')
             payload_size = int.from_bytes(entry[0x86:0x8A], 'little')
-            print(f'payload offset of ti module 0x{payload_offset:08X}')
-            print(f'payload size used to calculate the end of payload: 0x{payload_size:08X}')
+            print(f'[{ascii_string}] offset => 0x{payload_offset:08X}')
+            print(f'[{ascii_string}] size => 0x{payload_size:08X}')
 
             payload_start = 0xEE4 + payload_offset
             payload_end = payload_start + payload_size
@@ -154,7 +153,8 @@ def next_stage(payload_region, matched_dword, hash_multipler):
             return payload_region[payload_start:payload_end]
 
 def main():
-    matched_dword = 0x00741CF5
+    #matched_dword = 0x00741CF5
+    #matched_dword = 0xEED212BF
     hash_multipler = 0x0001003F
 
     # out decompressed payload
@@ -163,12 +163,32 @@ def main():
 
     # getting the target path 
     path_offset = 0x90 
-
     end = payload.find(b'\00', path_offset)
     path = payload[path_offset:end].decode('ascii')
     print(f'\npath : {path}')
 
-
+    matched_modules = [
+        ("AVDATA", 0xEED212BF),
+        ("ESAL", 0xB3765A99),
+        ("ESAL64", 0xF576AB97),
+        ("ESLDR", 0x8A1BF48C),
+        ("ESLDR64", 0x98887C0A),
+        ("ESWR", 0xB38C6009),
+        ("ESWR64", 0xF800F907),
+        ("FIXED", 0x02ADE654),
+        ("LauncherLdr64", 0x96FF6478),
+        ("modCreateProcess", 0x8858AC11),
+        ("modCreateProcess64", 0x9757C10F),
+        ("modTask", 0xCA4E4EE7),
+        ("modTask64", 0x5DFD58E5),
+        ("modUAC", 0x3B2859F5),
+        ("modUAC64", 0x7366BCF3),
+        ("modWriteFile", 0x4F7A1A39),
+        ("modWriteFile64", 0x1C549B37),
+        ("rshell", 0x7BDF01FE),
+        ("rshell64", 0x77B7F07C),
+        ("ti", 0x00741CF5),
+    ]
     # getting the target DLL 
     dll_offset = 0XF4
     end_target = payload.find(b'\x00', dll_offset)
@@ -180,12 +200,22 @@ def main():
 
     payload_point = base_offset + 0x3DD
     payload_region = payload[payload_point:]
+    
+    for mod_name, matched_dword in matched_modules:
+        final_payload = next_stage(payload_region, matched_dword, hash_multipler)
 
-    final_payload = next_stage(payload_region, matched_dword, hash_multipler)
+        if final_payload:
+            sha_hash = hashlib.sha256(final_payload).hexdigest()
+            red = '\033[91m'
+            reset = '\033[0m'
+            print(f'{red}[{mod_name} => 0x{matched_dword:08X}], sha256 =>{reset} {sha_hash}\n')
+            hexdump(final_payload[:12])
 
-    if final_payload:
-        with open('final_payload.bin' , 'wb') as f:
-            f.write(final_payload)
+            module_name = f'{mod_name}.bin'
+            with open(module_name , 'wb') as f:
+                f.write(final_payload)
     
 if __name__ == "__main__":
     main()
+
+
