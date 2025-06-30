@@ -1,32 +1,11 @@
 import hashlib, time, sys
 from hexdump import hexdump
 import lznt1
+
+
 TARGET = 0xC6A579EA
-def find_pattern(file_data, pattern):
-    # wild card could be anything such as @@@@IDAT
-    # doesnt necessary have to be ????IDAT, we can just target IDAT itself
-    offsets = []
-    start = 0
-    while True:
-        match = file_data.find(pattern, start)
-        if match == -1:
-            break
-        if match >= 4:
-            offsets.append(match - 4)
-        start = match + 1
-    return offsets
 
-def xor(buf, key):
-    size = len(buf)
-    while size % 4 != 0:
-        size -= 1
-
-    key_bytes = key.to_bytes(4, 'little')
-    for i in range(size):
-        buf[i] ^= key_bytes[i % 4]
-    return buf
-
-def main():
+def chunky():
     total_payload_size = 0
 
     filename = sys.argv[1] if len(sys.argv) > 1 else "Klureartcik.st"
@@ -66,8 +45,8 @@ def main():
         total_payload_size += chunk_size_int
 
         sys.stdout.write(f'\r[idat identifier]>: {idat_identifier.decode("ascii")} '
-                         f'[chunk start]>: 0x{chunk_start.hex().upper()} '
-                         f'[chunk size]>: 0x{total_payload_size:08X}')
+                            f'[chunk start]>: 0x{chunk_start.hex().upper()} '
+                            f'[chunk size]>: 0x{total_payload_size:08X}')
         sys.stdout.flush()
         time.sleep(0.01)
 
@@ -105,47 +84,108 @@ def main():
 
     decoded.append(0)
 
-    sha256_hash = hashlib.sha256(decoded).hexdigest()
-    expected_hash = "18bac7c368b1bb74e9d423e8e6f5bd27e0b81496b512657e1b0d19ff3f7724e9"
-
-    print('\nsuccess hash match for xor data ==> 18bac7c368b1bb74e9d423e8e6f5bd27e0b81496b512657e1b0d19ff3f7724e9' if sha256_hash == expected_hash else '\ndidnt match target hash')
     decompressed_payload = lznt1.decompress(decoded)
+
     with open('decompressed.bin', 'wb') as d:
         d.write(decompressed_payload)
-    function2_hash = hashlib.sha256(decompressed_payload).hexdigest()
-    function2h = '9b6d65c6edd4425ee34b441b0e5c7aa34e67ebb572af92ff4f28c471a148472f'
 
-    print('\nsuccess hash match for decompressed data ==> 9b6d65c6edd4425ee34b441b0e5c7aa34e67ebb572af92ff4f28c471a148472f' if function2_hash == function2h else '\ndidnt match target hash')
+    return decompressed_payload
 
-    pathOffset = 144
-    Offset2 = 352
-    Offset3 = 989
+def find_pattern(file_data, pattern):
+    # wild card could be anything such as @@@@IDAT
+    # doesnt necessary have to be ????IDAT, we can just target IDAT itself
+    offsets = []
+    start = 0
+    while True:
+        match = file_data.find(pattern, start)
+        if match == -1:
+            break
+        if match >= 4:
+            offsets.append(match - 4)
+        start = match + 1
+    return offsets
+
+def xor(buf, key):
+    size = len(buf)
+    while size % 4 != 0:
+        size -= 1
+
+    key_bytes = key.to_bytes(4, 'little')
+    for i in range(size):
+        buf[i] ^= key_bytes[i % 4]
+    return buf
+
+def compute_hash(string, multipler):
+    hash_value = 0
+    for a_char in string:
+        wchar = ord(a_char)
+        if wchar == 0:
+            break
+        hash_value = (hash_value * multipler + wchar) & 0xFFFFFFFF
+    return hash_value
+
+def next_stage(payload_region, matched_dword, hash_multipler):
+    module_region = 0x10DE
+
+    loop_counter = int.from_bytes(payload_region[0xEE4:0xEE8], 'little')
+
+    for i in range(loop_counter):
+        entry_offset = module_region + 0x8A * i
+        entry = payload_region[entry_offset:entry_offset + 0x8A]
+
+        raw_string = entry.split(b'\x00', 1)[0]
+        ascii_string = raw_string.decode('ascii', errors='replace')
+
+        hash_value = compute_hash(ascii_string, hash_multipler)
+
+        #print(f'{ascii_string} : hash = 0x{hash_value:08X}')
+
+        if hash_value == matched_dword:
+            print(f'matched DWORD: {ascii_string}')
+
+            payload_offset = int.from_bytes(entry[0x82:0x86], 'little')
+            payload_size = int.from_bytes(entry[0x86:0x8A], 'little')
+            print(f'payload offset of ti module 0x{payload_offset:08X}')
+            print(f'payload size used to calculate the end of payload: 0x{payload_size:08X}')
+
+            payload_start = 0xEE4 + payload_offset
+            payload_end = payload_start + payload_size
+
+            return payload_region[payload_start:payload_end]
+
+def main():
+    matched_dword = 0x00741CF5
+    hash_multipler = 0x0001003F
+
+    # out decompressed payload
+    payload = chunky()
+    
+
+    # getting the target path 
+    path_offset = 0x90 
+
+    end = payload.find(b'\00', path_offset)
+    path = payload[path_offset:end].decode('ascii')
+    print(f'\npath : {path}')
 
 
-    pathOffset = 144
-    end = decompressed_payload.find(b'\x00', pathOffset)
-    length = end - pathOffset
-    path = decompressed_payload[pathOffset:end].decode('ascii')
-    print(f'path:  {path}')
-
-    v20 = hexdump(decompressed_payload[:352])
-    print(v20)
-    payload_region = hexdump(decompressed_payload[8:Offset3])
-
-    print('payload region dword match offset')
-    payload_region_dword_match = decompressed_payload[:4318]
-
-    hexdump(payload_region_dword_match)
-
-    payload_region_other = decompressed_payload[:3812]
-    print('payload region other offset : same as v6 in IDA')
-    find_dword = payload_region_other[:138]
-
-    for i in payload_region_dword_match:
-        match = find_dword * i
-        hexdump(match)
+    # getting the target DLL 
+    dll_offset = 0XF4
+    end_target = payload.find(b'\x00', dll_offset)
+    target_dll = payload[dll_offset:end_target].decode('ascii', errors='replace')
+    print(f'target DLL : {target_dll}')
 
 
+    base_offset = int.from_bytes(payload[8:12], 'little')
 
+    payload_point = base_offset + 0x3DD
+    payload_region = payload[payload_point:]
+
+    final_payload = next_stage(payload_region, matched_dword, hash_multipler)
+
+    if final_payload:
+        with open('final_payload.bin' , 'wb') as f:
+            f.write(final_payload)
+    
 if __name__ == "__main__":
     main()
